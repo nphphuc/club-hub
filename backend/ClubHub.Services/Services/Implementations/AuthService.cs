@@ -2,11 +2,14 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
+using BCrypt.Net;
 using ClubHub.API.Data;
 using ClubHub.API.DTOs.Auth;
 using ClubHub.API.Entities;
 using ClubHub.API.Enums;
+using ClubHub.Application.Validators;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.IdentityModel.Tokens;
 
 namespace ClubHub.API.Services.Interfaces;
@@ -29,6 +32,11 @@ public class AuthService : IAuthService
 
         if (await _db.Users.AnyAsync(u => u.Username == req.Username))
             return ApiResult<LoginResponse>.Failure("Username đã tồn tại.");
+
+        var validator = new PhoneValidator();
+
+        if (!validator.IsValid(req.Phone))
+            return ApiResult<LoginResponse>.Failure("Số điện thoại không hợp lệ.");
 
         var user = new User
         {

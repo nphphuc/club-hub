@@ -58,7 +58,7 @@ public class AuthService : IAuthService
         var user = await _uow.Users.GetByEmailOrUsernameAsync(req.EmailOrUsername);
 
         if (user == null || !BCrypt.Net.BCrypt.Verify(req.Password, user.PasswordHash))
-            return ApiResult<LoginResponse>.Failure("Thông tin đăng nhập không hợp lệ.");
+            return ApiResult<LoginResponse>.Failure("Thông tin đăng nhập không đúng, vui lòng kiểm tra lại tài khoản hoặc mật khẩu.");
 
         if (!user.IsActive)
             return ApiResult<LoginResponse>.Failure("Tài khoản đã bị vô hiệu hóa.");

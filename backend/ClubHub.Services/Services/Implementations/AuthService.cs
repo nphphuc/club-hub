@@ -3,12 +3,11 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using BCrypt.Net;
-using ClubHub.API.Data;
 using ClubHub.API.DTOs.Auth;
 using ClubHub.API.Entities;
 using ClubHub.API.Enums;
+using ClubHub.API.Repositories;
 using ClubHub.Application.Validators;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.IdentityModel.Tokens;
 
@@ -16,21 +15,21 @@ namespace ClubHub.API.Services.Interfaces;
 
 public class AuthService : IAuthService
 {
-    private readonly AppDbContext _db;
+    private readonly IUnitOfWork _uow;
     private readonly IConfiguration _config;
 
-    public AuthService(AppDbContext db, IConfiguration config)
+    public AuthService(IUnitOfWork uow, IConfiguration config)
     {
-        _db = db;
+        _uow = uow;
         _config = config;
     }
 
     public async Task<ApiResult<LoginResponse>> RegisterAsync(RegisterRequest req)
     {
-        if (await _db.Users.AnyAsync(u => u.Email == req.Email))
+        if (await _uow.Users.ExistsByEmailAsync(req.Email))
             return ApiResult<LoginResponse>.Failure("Email đã tồn tại.");
 
-        if (await _db.Users.AnyAsync(u => u.Username == req.Username))
+        if (await _uow.Users.ExistsByUsernameAsync(req.Username))
             return ApiResult<LoginResponse>.Failure("Username đã tồn tại.");
 
         var validator = new PhoneValidator();
@@ -48,16 +47,15 @@ public class AuthService : IAuthService
             Phone = req.Phone
         };
 
-        _db.Users.Add(user);
-        await _db.SaveChangesAsync();
+        _uow.Users.Add(user);
+        await _uow.SaveChangesAsync();
 
         return await GenerateLoginResponseAsync(user);
     }
 
     public async Task<ApiResult<LoginResponse>> LoginAsync(LoginRequest req)
     {
-        var user = await _db.Users.FirstOrDefaultAsync(u =>
-            u.Email == req.EmailOrUsername || u.Username == req.EmailOrUsername);
+        var user = await _uow.Users.GetByEmailOrUsernameAsync(req.EmailOrUsername);
 
         if (user == null || !BCrypt.Net.BCrypt.Verify(req.Password, user.PasswordHash))
             return ApiResult<LoginResponse>.Failure("Thông tin đăng nhập không hợp lệ.");
@@ -70,8 +68,7 @@ public class AuthService : IAuthService
 
     public async Task<ApiResult<LoginResponse>> RefreshTokenAsync(string refreshToken)
     {
-        var user = await _db.Users.FirstOrDefaultAsync(u =>
-            u.RefreshToken == refreshToken && u.RefreshTokenExpiry > DateTime.UtcNow);
+        var user = await _uow.Users.GetByRefreshTokenAsync(refreshToken);
 
         if (user == null)
             return ApiResult<LoginResponse>.Failure("Refresh token không hợp lệ hoặc đã hết hạn.");
@@ -81,7 +78,7 @@ public class AuthService : IAuthService
 
     public async Task<ApiResult<bool>> ChangePasswordAsync(Guid userId, ChangePasswordRequest req)
     {
-        var user = await _db.Users.FindAsync(userId);
+        var user = await _uow.Users.GetByIdAsync(userId);
         if (user == null) return ApiResult<bool>.Failure("Người dùng không tồn tại.");
 
         if (!BCrypt.Net.BCrypt.Verify(req.CurrentPassword, user.PasswordHash))
@@ -89,19 +86,19 @@ public class AuthService : IAuthService
 
         user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(req.NewPassword);
         user.UpdatedAt = DateTime.UtcNow;
-        await _db.SaveChangesAsync();
+        await _uow.SaveChangesAsync();
         return ApiResult<bool>.Success(true);
     }
 
     public async Task<ApiResult<bool>> ForgotPasswordAsync(ForgotPasswordRequest req)
     {
-        var user = await _db.Users.FirstOrDefaultAsync(u => u.Email == req.Email);
+        var user = await _uow.Users.GetByEmailAsync(req.Email);
         if (user == null)
             return ApiResult<bool>.Success(true); // Don't reveal whether email exists
 
         user.PasswordResetToken = GenerateSecureToken();
         user.PasswordResetTokenExpiry = DateTime.UtcNow.AddHours(1);
-        await _db.SaveChangesAsync();
+        await _uow.SaveChangesAsync();
 
         // TODO: Send email with reset token
         return ApiResult<bool>.Success(true);
@@ -109,8 +106,7 @@ public class AuthService : IAuthService
 
     public async Task<ApiResult<bool>> ResetPasswordAsync(ResetPasswordRequest req)
     {
-        var user = await _db.Users.FirstOrDefaultAsync(u =>
-            u.PasswordResetToken == req.Token && u.PasswordResetTokenExpiry > DateTime.UtcNow);
+        var user = await _uow.Users.GetByPasswordResetTokenAsync(req.Token);
 
         if (user == null)
             return ApiResult<bool>.Failure("Token không hợp lệ hoặc đã hết hạn.");
@@ -118,20 +114,20 @@ public class AuthService : IAuthService
         user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(req.NewPassword);
         user.PasswordResetToken = null;
         user.PasswordResetTokenExpiry = null;
-        await _db.SaveChangesAsync();
+        await _uow.SaveChangesAsync();
         return ApiResult<bool>.Success(true);
     }
 
     public async Task<ApiResult<UserProfileDto>> GetProfileAsync(Guid userId)
     {
-        var user = await _db.Users.FindAsync(userId);
+        var user = await _uow.Users.GetByIdAsync(userId);
         if (user == null) return ApiResult<UserProfileDto>.Failure("Người dùng không tồn tại.");
         return ApiResult<UserProfileDto>.Success(MapToProfile(user));
     }
 
     public async Task<ApiResult<UserProfileDto>> UpdateProfileAsync(Guid userId, UpdateProfileRequest req)
     {
-        var user = await _db.Users.FindAsync(userId);
+        var user = await _uow.Users.GetByIdAsync(userId);
         if (user == null) return ApiResult<UserProfileDto>.Failure("Người dùng không tồn tại.");
 
         if (req.FullName != null) user.FullName = req.FullName;
@@ -139,17 +135,17 @@ public class AuthService : IAuthService
         if (req.AvatarUrl != null) user.AvatarUrl = req.AvatarUrl;
         user.UpdatedAt = DateTime.UtcNow;
 
-        await _db.SaveChangesAsync();
+        await _uow.SaveChangesAsync();
         return ApiResult<UserProfileDto>.Success(MapToProfile(user));
     }
 
     public async Task<ApiResult<bool>> LogoutAsync(Guid userId)
     {
-        var user = await _db.Users.FindAsync(userId);
+        var user = await _uow.Users.GetByIdAsync(userId);
         if (user == null) return ApiResult<bool>.Failure("Người dùng không tồn tại.");
         user.RefreshToken = null;
         user.RefreshTokenExpiry = null;
-        await _db.SaveChangesAsync();
+        await _uow.SaveChangesAsync();
         return ApiResult<bool>.Success(true);
     }
 
@@ -162,7 +158,7 @@ public class AuthService : IAuthService
 
         user.RefreshToken = refreshToken;
         user.RefreshTokenExpiry = DateTime.UtcNow.AddDays(7);
-        await _db.SaveChangesAsync();
+        await _uow.SaveChangesAsync();
 
         return ApiResult<LoginResponse>.Success(new LoginResponse(accessToken, refreshToken, MapToProfile(user)));
     }

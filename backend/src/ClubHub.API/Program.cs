@@ -1,6 +1,7 @@
 using System.Text;
 using ClubHub.API.Data;
 using ClubHub.API.Middlewares;
+using ClubHub.API.Repositories;
 using ClubHub.API.Services.Implementations;
 using ClubHub.API.Services.Interfaces;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -54,6 +55,9 @@ builder.Services.AddCors(options =>
     options.AddPolicy("AllowAll", policy =>
         policy.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader());
 });
+
+// ── Repositories & Unit of Work ───────────────────────────────────────────────
+builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
 
 // ── Services ──────────────────────────────────────────────────────────────────
 builder.Services.AddScoped<IAuthService, AuthService>();
